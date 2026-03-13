@@ -1,0 +1,23 @@
+services:
+  onedrive:
+    image: driveone/onedrive:debian
+    container_name: onedrive
+    restart: unless-stopped
+
+    # Passe UID/GID an deinen Benutzer an
+    environment:
+      - ONEDRIVE_UID=501
+      - ONEDRIVE_GID=20
+      - ONEDRIVE_VERBOSE=0
+
+    volumes:
+      # Konfiguration & Datenbank
+      - /Volumes/HomeServerData/OneDriveConfig:/onedrive/conf
+      # Dein lokaler OneDrive-Sync-Ordner
+      - /Volumes/HomeServerData/OneDrive:/onedrive/data
+
+    # Für interaktives Login (OAuth)
+    command: >
+      --monitor
+      --confdir=/onedrive/conf
+      --syncdir=/onedrive/data

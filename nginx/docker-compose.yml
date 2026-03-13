@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /Volumes/HomeServerData/Nginx/conf.d:/etc/nginx/conf.d
+      - /Volumes/HomeServerData/Nginx/etc/dhparam.pem:/etc/nginx/dhparam.pem
+      - /Volumes/HomeServerData/Nginx/html:/usr/share/nginx/html
+      - /Volumes/HomeServerData/Nginx/certbot_www:/var/www/certbot
+      - /Volumes/HomeServerData/Nginx/certbot_conf:/etc/letsencrypt
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    restart: unless-stopped
+    volumes:
+      - /Volumes/HomeServerData/Nginx/certbot_www:/var/www/certbot
+      - /Volumes/HomeServerData/Nginx/certbot_conf:/etc/letsencrypt
+    entrypoint: >
+      sh -c "trap exit TERM;
+             while :; do
+               certbot renew --webroot -w /var/www/certbot --quiet;
+               sleep 12h;
+             done"
+

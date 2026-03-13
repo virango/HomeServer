@@ -1,0 +1,45 @@
+version: '3.9'
+
+services:
+  homeassistant:
+    container_name: ha
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      - /Volumes/HomeServerData/HomeAssistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Europe/Berlin
+    restart: unless-stopped
+    network_mode: host
+  hm2mqtt:
+    container_name: hm2mqtt
+    image: ghcr.io/tomquist/hm2mqtt:latest
+    restart: unless-stopped
+    environment:
+      - MQTT_BROKER_URL=mqtt://192.168.178.3:1883
+      - MQTT_USERNAME='listeners'
+      - MQTT_PASSWORD='?!@9Nz#du%maAs9fQSV9'
+      - POLL_CELL_DATA=true
+      - POLL_EXTRA_BATTERY_DATA=true
+      - POLL_CALIBRATION_DATA=true
+      - DEVICE_0=HMA-1:2419720d2e06
+  mars:
+    build: .
+    container_name: mars-energy-controller
+    restart: unless-stopped
+    environment:
+      - MQTT_BROKER_IP=192.168.178.3
+      - MQTT_BROKER_PORT=1883
+      - SMARTMETER_IP=192.168.178.53
+      - SMARTMETER_PORT=12345
+    networks:
+      - host_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  host_network:
+    driver: bridge
