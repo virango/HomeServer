@@ -174,7 +174,7 @@ def process_smartmeter_data(data):
         log(f"[Smartmeter] Error processing: {e}")
 
 def process_battery_data(data):
-    global battery_level, battery_output_power
+    global battery_level, current_output_power
     try:
         g1 = 0
         g2 = 0
