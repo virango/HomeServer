@@ -4,19 +4,19 @@ services:
     container_name: onedrive
     restart: unless-stopped
 
-    # Passe UID/GID an deinen Benutzer an
+    # Adapt UID/GID to mac user
     environment:
       - ONEDRIVE_UID=501
       - ONEDRIVE_GID=20
       - ONEDRIVE_VERBOSE=0
 
     volumes:
-      # Konfiguration & Datenbank
+      # Configuration & Database
       - /Volumes/HomeServerData/OneDriveConfig:/onedrive/conf
-      # Dein lokaler OneDrive-Sync-Ordner
+      # Your local OneDrive sync folder
       - /Volumes/HomeServerData/OneDrive:/onedrive/data
 
-    # Für interaktives Login (OAuth)
+      # For interactive login (OAuth)
     command: >
       --monitor
       --confdir=/onedrive/conf
