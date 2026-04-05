@@ -185,7 +185,7 @@ def process_battery_data(data):
                     if key == "pe": battery_level = int(value)
                     elif key == "g1": g1 = int(value)
                     elif key == "g2": g2 = int(value)
-            battery_output_power = g1 + g2        
+            current_output_power = g1 + g2        
     except Exception as e:
         log(f"[Battery] Error processing: {e}")
 
