@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+# Set timezone
+ENV TZ=Europe/Berlin
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 # Stellt sicher, dass Python-Output sofort zu Docker-Logs geht
 ENV PYTHONUNBUFFERED=1
 

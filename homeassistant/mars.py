@@ -6,8 +6,9 @@ import paho.mqtt.client as mqtt
 import datetime
 import os
 
-def log(msg):
-    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+def log(msg, level=0):
+    if level <= current_log_level:
+        print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
 # Konstanten
 BATTERY_OUTPUT_MIN = 80
@@ -26,22 +27,24 @@ phase3 = -1
 current_output_power = 0
 battery_output_power = -1
 battery_level = -1
+current_log_level = 2 # 0=Error, 1=Info, 2=Debug
 
 mqtt_publish_mutex = threading.Lock()
 calc_data_mutex = threading.Lock()
 
 def on_connect(client, userdata, flags, reason_code, properties):
-    log(f"[MQTT] Connected with code {reason_code}")
+    log(f"[MQTT] Connected with code {reason_code}", 1)
     client.subscribe("hame_energy/HMA-1/device/2419720d2e06/ctrl")
     client.subscribe("homeassistant/status")
-    log("[HomeAssistant] Sending discovery topics after connection")
+    client.subscribe("mars/log_level")
+    log("[HomeAssistant] Sending discovery topics after connection", 1)
     publish_homeassistant_discovery(client)
 
 def on_connect_fail(client, userdata):
-    log("[MQTT] Connection failed")
+    log("[MQTT] Connection failed", 0)
 
 def on_disconnect(client, userdata, reason_code, properties=None, packet_from_broker=None):
-    log(f"[MQTT] Disconnected. Reason code: {reason_code}")
+    log(f"[MQTT] Disconnected. Reason code: {reason_code}", 1)
 
 def publish_homeassistant_discovery(mqttc):
     try:
@@ -84,9 +87,9 @@ def publish_homeassistant_discovery(mqttc):
 
         for topic, payload in sensors:
             mqttc.publish(topic, json.dumps(payload), retain=True)
-            log(f"[HomeAssistant] Discovery published: {topic}")
+            log(f"[HomeAssistant] Discovery published: {topic}", 1)
     except Exception as e:
-        log(f"[HomeAssistant] Error sending discovery topics: {e}")
+        log(f"[HomeAssistant] Error sending discovery topics: {e}", 0)
 
 def on_message(client, userdata, msg):
     try:
@@ -95,10 +98,17 @@ def on_message(client, userdata, msg):
         if topic.startswith("hame_energy"):
             process_battery_data(payload)
         elif topic == "homeassistant/status" and payload == "online":
-            log("[HomeAssistant] Online received — sending discovery topics")
+            log("[HomeAssistant] Online received — sending discovery topics", 1)
             publish_homeassistant_discovery(client)
+        elif topic == "mars/log_level":
+            global current_log_level
+            try:
+                current_log_level = int(payload)
+                log(f"Log level set to {current_log_level}", 1)
+            except ValueError:
+                log("Invalid log level received", 0)
     except Exception as e:
-        log(f"[MQTT] Error processing message: {e}")
+        log(f"[MQTT] Error processing message: {e}", 0)
 
 def mqtt_init():
     mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -118,7 +128,7 @@ def publish_battery_data_request(mqttc):
                     mqttc.publish("hame_energy/HMA-1/App/2419720d2e06/ctrl", "cd=01")
             time.sleep(5)
         except Exception as e:
-            log(f"[Error] Battery query: {e}")
+            log(f"[Error] Battery query: {e}", 0)
             time.sleep(5)
 
 def publish_smartmeter_values(mqttc):
@@ -131,7 +141,7 @@ def publish_smartmeter_values(mqttc):
                     mqttc.publish("smartmeter/values/phase3", str(phase3))
             time.sleep(5)
         except Exception as e:
-            log(f"[Error] Sending smartmeter values: {e}")
+            log(f"[Error] Sending smartmeter values: {e}", 0)
             time.sleep(5)
 
 def smartmeter_init():
@@ -139,11 +149,11 @@ def smartmeter_init():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(10)
         sock.connect((smartmeter_ip, smartmeter_port))
-        log("[Smartmeter] Connection established")
+        log("[Smartmeter] Connection established", 1)
         sock.sendall(b"hello\n")
         return sock
     except Exception as e:
-        log(f"[Smartmeter] Connection error: {e}")
+        log(f"[Smartmeter] Connection error: {e}", 0)
         return None
 
 def smartmeter_receive_data(sock):
@@ -154,7 +164,7 @@ def smartmeter_receive_data(sock):
                 process_smartmeter_data(data)
             time.sleep(5)
         except Exception as e:
-            log(f"[Smartmeter] Error receiving: {e}")
+            log(f"[Smartmeter] Error receiving: {e}", 0)
             sock = smartmeter_init()
             time.sleep(10)
 
@@ -169,15 +179,16 @@ def process_smartmeter_data(data):
                     phase1 = int(values[0])
                     phase2 = int(values[1])
                     phase3 = int(values[2])
+                    log(f"[Smartmeter data] Phase 1: {phase1}W, Phase 2: {phase2}W, Phase 3: {phase3}W", 2)
                     calculate_battery_output()
     except Exception as e:
-        log(f"[Smartmeter] Error processing: {e}")
+        log(f"[Smartmeter] Error processing: {e}", 0)
 
 def process_battery_data(data):
     global battery_level, current_output_power
     try:
-        g1 = 0
-        g2 = 0
+        g1 = -1
+        g2 = -1
         with calc_data_mutex:
             for pair in data.split(","):
                 if "=" in pair:
@@ -185,35 +196,41 @@ def process_battery_data(data):
                     if key == "pe": battery_level = int(value)
                     elif key == "g1": g1 = int(value)
                     elif key == "g2": g2 = int(value)
-            current_output_power = g1 + g2        
+            if g1 != -1 and g2 != -1:        
+                current_output_power = g1 + g2
+                log(f"[Battery data] Level: {battery_level}%, Output Power: {current_output_power}W", 2)
     except Exception as e:
-        log(f"[Battery] Error processing: {e}")
+        log(f"[Battery] Error processing: {e}", 0)
 
 def calculate_battery_output():
     global battery_output_power, battery_level
     try:
         with calc_data_mutex:
             max_battery_output = BATTERY_OUTPUT_MAX
-            if battery_level != -1 and battery_level < 20:
+            if battery_level != -1 and battery_level <= 20:
                 if battery_level <= 10:
                     max_battery_output = BATTERY_OUTPUT_MIN
+                    log(f"[Battery output] Battery level critically low: {battery_level}%. Max output set to {max_battery_output}W", 1)
                 else:
                     # Quadratic calculation for smoother decline
                     factor = (20 - battery_level) / 10.0
                     reduction = (factor ** 2) * (BATTERY_OUTPUT_MAX - BATTERY_OUTPUT_MIN)
                     max_battery_output = max(BATTERY_OUTPUT_MIN, BATTERY_OUTPUT_MAX - reduction)
+                    log(f"[Battery output] Battery level: {battery_level}%, Max output adjusted to {max_battery_output}W", 2)
                     
             if phase1 < 40 and phase2 < 100 and phase3 < 130:
                 battery_output_power = 80 if phase2 < 40 else 100
+                log(f"[Battery output] Base consumption detected. Setting to {battery_output_power}W", 1)
             else:
                 battery_output_power = int((phase1 + phase2) * REACTIVE_POWER_FACTOR)
-                phase3_reactive = phase3 * REACTIVE_POWER_FACTOR
+                phase3_reactive = int(phase3 * REACTIVE_POWER_FACTOR)
                 delta = abs(current_output_power - phase3_reactive)
-                battery_output_power += delta
+                battery_output_power += int(delta)
+                log(f"[Battery output] Calculated output power: {battery_output_power}W (Current Output: {current_output_power}W)", 2)
 
             battery_output_power = max(BATTERY_OUTPUT_MIN, min(battery_output_power, max_battery_output))
     except Exception as e:
-        log(f"[Calculation] Error: {e}")
+        log(f"[Calculation] Error: {e}", 0)
 
 def publish_set_battery_output(mqttc):
     while True:
@@ -221,7 +238,7 @@ def publish_set_battery_output(mqttc):
             with mqtt_publish_mutex:
                 with calc_data_mutex:
                     if battery_output_power != -1:
-                        now = datetime.datetime.now()
+                        now = datetime.datetime.now().astimezone()
                         weekday = now.weekday()  # 0=Monday, 6=Sunday
                         hour = now.hour
                         minute = now.minute
@@ -247,32 +264,28 @@ def publish_set_battery_output(mqttc):
 
                         b1 = b1_dt.strftime("%H:%M")
                         e1 = e1_dt.strftime("%H:%M")
-                        b2 = e1
+                        if e1 == "23:59":
+                            b2 = "00:01"
+                        else:
+                            b2 = e1
                         e2 = "23:59"
 
                         # Shutdown (no feed-in) daily 23:59-00:01
                         is_interrupt = (hour == 23 and minute >= 59) or (hour == 0 and minute < 1)
                         if is_interrupt:
                             v1 = 0
+                            a1 = 0
                         else:
-                            v1 = 80 if force_80w else battery_output_power
+                            v1 = 80 if force_80w else int(battery_output_power)
+                            a1 = 1
 
-                        payload = f"cd=20,md=0,a1=1,b1={b1},e1={e1},v1={v1},a2=1,b2={b2},e2={e2},v2=80,a3=0,b3=0:0,e3=23:59,v3=80"
+                        payload = f"cd=20,md=0,a1={a1},b1={b1},e1={e1},v1={v1},a2=1,b2={b2},e2={e2},v2=80,a3=0,b3=0:0,e3=23:59,v3=80"
                         mqttc.publish("hame_energy/HMA-1/App/2419720d2e06/ctrl", payload)
+                        log(f"[Battery output] Published control command: {payload}", 2)
             time.sleep(20)
         except Exception as e:
-            log(f"[Error] Battery setting: {e}")
+            log(f"[Error] Battery setting: {e}", 0)
             time.sleep(10)
-
-def publish_poweroutput_request(mqttc):
-    while True:
-        try:
-            with mqtt_publish_mutex:
-                mqttc.publish("powermeter_balkon/command", "status_update")
-            time.sleep(1)
-        except Exception as e:
-            log(f"[Error] Power output request: {e}")
-            time.sleep(5)
 
 def run():
     while True:
@@ -280,7 +293,7 @@ def run():
             mqttc = mqtt_init()
             smartmeter = smartmeter_init()
             if not smartmeter:
-                log("[Warning] Smartmeter not available. Retrying in 10 seconds.")
+                log("[Warning] Smartmeter not available. Retrying in 10 seconds.", 1)
                 time.sleep(10)
                 continue
 
@@ -288,7 +301,6 @@ def run():
                 threading.Thread(target=publish_battery_data_request, args=(mqttc,)),
                 threading.Thread(target=smartmeter_receive_data, args=(smartmeter,)),
                 threading.Thread(target=publish_smartmeter_values, args=(mqttc,)),
-                threading.Thread(target=publish_poweroutput_request, args=(mqttc,)),
                 threading.Thread(target=publish_set_battery_output, args=(mqttc,))
             ]
 
@@ -299,7 +311,7 @@ def run():
             while True:
                 time.sleep(60)
         except Exception as e:
-            log(f"[Critical error] Restarting main process: {e}")
+            log(f"[Critical error] Restarting main process: {e}", 0)
             time.sleep(10)
 
 if __name__ == "__main__":
