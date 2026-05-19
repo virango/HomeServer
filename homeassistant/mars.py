@@ -33,7 +33,7 @@ smartmeter_mode = 1
 current_log_level = 2 # 0=Error, 1=Info, 2=Debug
 
 mqtt_publish_mutex = threading.Lock()
-calc_data_mutex = threading.Lock()
+calc_data_mutex = threading.RLock()
 
 def on_connect(client, userdata, flags, reason_code, properties):
     log(f"[MQTT] Connected with code {reason_code}", 1)
@@ -112,12 +112,12 @@ def on_message(client, userdata, msg):
             except ValueError:
                 log(f"[IoMeter] Invalid consumption payload: {payload}", 0)
         elif topic == "homeassistant/power/io_meter/connection":
-            try:
-                io_meter_connection = int(payload)
-                log(f"[IoMeter] Connection state: {io_meter_connection}", 2)
-                calculate_battery_output()
-            except ValueError:
-                log(f"[IoMeter] Invalid connection payload: {payload}", 0)
+            if payload.lower() == "on":
+                io_meter_connection = 1
+            else:
+                io_meter_connection = 0
+            log(f"[IoMeter] Connection state: {io_meter_connection} (payload={payload})", 2)
+            calculate_battery_output()
         elif topic == "mars/smartmeter":
             try:
                 mode = int(payload)
@@ -229,7 +229,8 @@ def process_battery_data(data):
             if g1 != -1 and g2 != -1:        
                 current_output_power = g1 + g2
                 log(f"[Battery data] Level: {battery_level}%, Output Power: {current_output_power}W", 2)
-                calculate_battery_output()
+        if g1 != -1 and g2 != -1:
+            calculate_battery_output()
     except Exception as e:
         log(f"[Battery] Error processing: {e}", 0)
 
@@ -268,9 +269,6 @@ def calculate_battery_output_iometer():
             elif io_meter_consumption is None:
                 battery_output_power = BATTERY_OUTPUT_MIN
                 log("[Battery output] IoMeter consumption unavailable. Forcing minimum output.", 1)
-            elif io_meter_consumption <= 0:
-                battery_output_power = BATTERY_OUTPUT_MIN
-                log(f"[Battery output] IoMeter consumption non-positive ({io_meter_consumption}W). Forcing minimum output.", 2)
             else:
                 adjusted_consumption = io_meter_consumption + current_output_power
                 if adjusted_consumption <= 0:
