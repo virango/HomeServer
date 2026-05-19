@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Digi-Photo Kalender</title>
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Digi-Photo Kalender</h1>
+    <p>Hier legst du Ereignisse an, um Fotos an bestimmte Zielverzeichnisse zu verschieben.</p>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Ereignis anlegen</h2>
+        <form id="event-form">
+          <label>Bezeichnung<input type="text" name="title" required></label>
+          <label>Zielverzeichnis<input type="text" name="target_dir" placeholder="z. B. Urlaub/2026" required></label>
+          <label>Startdatum<input type="date" name="start_date" required></label>
+          <label>Enddatum<input type="date" name="end_date"></label>
+          <label>Beschreibung<textarea name="description"></textarea></label>
+          <button type="submit">Speichern</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Kalender</h2>
+        <div id="calendar"></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Aktuelle Ereignisse</h2>
+      <table>
+        <thead><tr><th>Titel</th><th>Start</th><th>Ende</th><th>Ziel</th></tr></thead>
+        <tbody id="events-list"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js"></script>
+  <script>
+    const calendarEl = document.getElementById('calendar');
+    const eventForm = document.getElementById('event-form');
+    const eventsList = document.getElementById('events-list');
+
+    async function loadEvents() {
+      const response = await fetch('/api/events');
+      const events = await response.json();
+      return events.map(event => ({
+        id: event.id,
+        title: event.title,
+        start: event.start_date,
+        end: event.end_date,
+        allDay: true,
+        extendedProps: {
+          target_dir: event.target_dir,
+          description: event.description,
+        }
+      }));
+    }
+
+    async function renderEvents() {
+      const events = await loadEvents();
+      calendar.removeAllEvents();
+      events.forEach(event => calendar.addEvent(event));
+
+      eventsList.innerHTML = events.map(event => `
+        <tr>
+          <td>${event.title}</td>
+          <td>${event.start}</td>
+          <td>${event.end}</td>
+          <td>${event.extendedProps.target_dir}</td>
+        </tr>
+      `).join('');
+    }
+
+    const calendar = new FullCalendar.Calendar(calendarEl, {
+      initialView: 'dayGridMonth',
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,listWeek'
+      }
+    });
+
+    calendar.render();
+    renderEvents();
+
+    eventForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const formData = new FormData(eventForm);
+      const payload = {
+        title: formData.get('title'),
+        target_dir: formData.get('target_dir'),
+        start_date: formData.get('start_date'),
+        end_date: formData.get('end_date') || formData.get('start_date'),
+        description: formData.get('description') || ''
+      };
+
+      const response = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        eventForm.reset();
+        renderEvents();
+      } else {
+        const error = await response.json();
+        alert('Fehler: ' + (error.error || 'Ungültige Eingabe'));
+      }
+    });
+  </script>
+</body>
+</html>

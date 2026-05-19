@@ -1,0 +1,19 @@
+%Image::ExifTool::UserDefined = ( 
+  'Image::ExifTool::Composite' => { 
+    MyRawFileNumber => { 
+      Require => { 
+        0 => 'MyFileNameNumber', 
+      }, ValueConv => 'length($val[0]) > 4 ? substr($val[0], -4) : $val[0]', 
+    },
+    MyFileNameNumber => {
+      Require => {
+        0 => 'FileName',
+      }, ValueConv => 'length($val[0]) > 8 ? substr($val[0], -8,4): $val[0]',
+    }, 
+    MyMovFileNumber => {
+      Require => {
+        0 => 'MyFileNameNumber',
+      }, ValueConv => 'length($val[0]) > 4 ? substr($val[0], -4) : $val[0]',
+    },
+  },
+);

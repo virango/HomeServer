@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  emby:
+    image: lscr.io/linuxserver/emby:latest
+    container_name: emby
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=Europe/Berlin
+      - EMBY_HWACCEL=1
+    volumes:
+      - /Volumes/HomeServerData/Emby/config:/config
+      - /Volumes/HomeServerData/Emby/media:/data/media
+    ports:
+      - "8096:8096"   # HTTP
+      - "8920:8920"   # HTTPS (optional)
+    restart: unless-stopped

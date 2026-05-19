@@ -27,6 +27,9 @@ phase3 = -1
 current_output_power = 0
 battery_output_power = -1
 battery_level = -1
+io_meter_consumption = None
+io_meter_connection = 0
+smartmeter_mode = 1
 current_log_level = 2 # 0=Error, 1=Info, 2=Debug
 
 mqtt_publish_mutex = threading.Lock()
@@ -37,6 +40,9 @@ def on_connect(client, userdata, flags, reason_code, properties):
     client.subscribe("hame_energy/HMA-1/device/2419720d2e06/ctrl")
     client.subscribe("homeassistant/status")
     client.subscribe("mars/log_level")
+    client.subscribe("mars/smartmeter")
+    client.subscribe("homeassistant/power/io_meter/value")
+    client.subscribe("homeassistant/power/io_meter/connection")
     log("[HomeAssistant] Sending discovery topics after connection", 1)
     publish_homeassistant_discovery(client)
 
@@ -93,15 +99,39 @@ def publish_homeassistant_discovery(mqttc):
 
 def on_message(client, userdata, msg):
     try:
+        global io_meter_consumption, io_meter_connection, smartmeter_mode, current_log_level
         topic = msg.topic
         payload = msg.payload.decode().strip()
         if topic.startswith("hame_energy"):
             process_battery_data(payload)
+        elif topic == "homeassistant/power/io_meter/value":
+            try:
+                io_meter_consumption = float(payload)
+                log(f"[IoMeter] Consumption value: {io_meter_consumption}W", 2)
+                calculate_battery_output()
+            except ValueError:
+                log(f"[IoMeter] Invalid consumption payload: {payload}", 0)
+        elif topic == "homeassistant/power/io_meter/connection":
+            try:
+                io_meter_connection = int(payload)
+                log(f"[IoMeter] Connection state: {io_meter_connection}", 2)
+                calculate_battery_output()
+            except ValueError:
+                log(f"[IoMeter] Invalid connection payload: {payload}", 0)
+        elif topic == "mars/smartmeter":
+            try:
+                mode = int(payload)
+                if mode in (1, 2):
+                    smartmeter_mode = mode
+                    log(f"[MQTT] Smartmeter mode set to {smartmeter_mode}", 1)
+                else:
+                    log(f"[MQTT] Invalid smartmeter mode received: {payload}", 0)
+            except ValueError:
+                log(f"[MQTT] Invalid smartmeter mode payload: {payload}", 0)
         elif topic == "homeassistant/status" and payload == "online":
             log("[HomeAssistant] Online received — sending discovery topics", 1)
             publish_homeassistant_discovery(client)
         elif topic == "mars/log_level":
-            global current_log_level
             try:
                 current_log_level = int(payload)
                 log(f"Log level set to {current_log_level}", 1)
@@ -199,25 +229,68 @@ def process_battery_data(data):
             if g1 != -1 and g2 != -1:        
                 current_output_power = g1 + g2
                 log(f"[Battery data] Level: {battery_level}%, Output Power: {current_output_power}W", 2)
+                calculate_battery_output()
     except Exception as e:
         log(f"[Battery] Error processing: {e}", 0)
 
+
 def calculate_battery_output():
-    global battery_output_power, battery_level
+    if smartmeter_mode == 2:
+        calculate_battery_output_ct001()
+    else:
+        calculate_battery_output_iometer()
+
+
+def calculate_max_battery_output():
+    if battery_level == -1 or battery_level > 20:
+        return BATTERY_OUTPUT_MAX
+
+    if battery_level <= 10:
+        log(f"[Battery output] Battery level critically low: {battery_level}%. Max output set to {BATTERY_OUTPUT_MIN}W", 1)
+        return BATTERY_OUTPUT_MIN
+
+    factor = (20 - battery_level) / 10.0
+    reduction = (factor ** 2) * (BATTERY_OUTPUT_MAX - BATTERY_OUTPUT_MIN)
+    max_output = max(BATTERY_OUTPUT_MIN, BATTERY_OUTPUT_MAX - reduction)
+    log(f"[Battery output] Battery level: {battery_level}%, Max output adjusted to {max_output}W", 2)
+    return max_output
+
+
+def calculate_battery_output_iometer():
+    global battery_output_power
     try:
         with calc_data_mutex:
-            max_battery_output = BATTERY_OUTPUT_MAX
-            if battery_level != -1 and battery_level <= 20:
-                if battery_level <= 10:
-                    max_battery_output = BATTERY_OUTPUT_MIN
-                    log(f"[Battery output] Battery level critically low: {battery_level}%. Max output set to {max_battery_output}W", 1)
+            max_battery_output = calculate_max_battery_output()
+
+            if io_meter_connection != 1:
+                battery_output_power = BATTERY_OUTPUT_MIN
+                log(f"[Battery output] IO meter connection invalid ({io_meter_connection}). Forcing minimum output {battery_output_power}W", 1)
+            elif io_meter_consumption is None:
+                battery_output_power = BATTERY_OUTPUT_MIN
+                log("[Battery output] IoMeter consumption unavailable. Forcing minimum output.", 1)
+            elif io_meter_consumption <= 0:
+                battery_output_power = BATTERY_OUTPUT_MIN
+                log(f"[Battery output] IoMeter consumption non-positive ({io_meter_consumption}W). Forcing minimum output.", 2)
+            else:
+                adjusted_consumption = io_meter_consumption + current_output_power
+                if adjusted_consumption <= 0:
+                    battery_output_power = BATTERY_OUTPUT_MIN
+                    log(f"[Battery output] Adjusted consumption <=0 ({adjusted_consumption}W). Forcing minimum output.", 2)
                 else:
-                    # Quadratic calculation for smoother decline
-                    factor = (20 - battery_level) / 10.0
-                    reduction = (factor ** 2) * (BATTERY_OUTPUT_MAX - BATTERY_OUTPUT_MIN)
-                    max_battery_output = max(BATTERY_OUTPUT_MIN, BATTERY_OUTPUT_MAX - reduction)
-                    log(f"[Battery output] Battery level: {battery_level}%, Max output adjusted to {max_battery_output}W", 2)
-                    
+                    battery_output_power = int(adjusted_consumption)
+                    log(f"[Battery output] Using IoMeter net consumption {io_meter_consumption}W and current battery output {current_output_power}W => adjusted load {adjusted_consumption}W => output {battery_output_power}W", 2)
+
+            battery_output_power = max(BATTERY_OUTPUT_MIN, min(battery_output_power, max_battery_output))
+    except Exception as e:
+        log(f"[Calculation] Error: {e}", 0)
+
+
+def calculate_battery_output_ct001():
+    global battery_output_power
+    try:
+        with calc_data_mutex:
+            max_battery_output = calculate_max_battery_output()
+
             if phase1 < 40 and phase2 < 100 and phase3 < 130:
                 battery_output_power = 80 if phase2 < 40 else 100
                 log(f"[Battery output] Base consumption detected. Setting to {battery_output_power}W", 1)
