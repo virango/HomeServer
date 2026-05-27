@@ -315,16 +315,17 @@ def publish_set_battery_output(mqttc):
                         minute = now.minute
 
                         # Determine if 80W should be forced
-                        is_weekend = weekday >= 5
                         force_80w = False
-                        if is_weekend:
-                            # Weekend: 23:00 to 7:30
-                            if hour >= 23 or (hour < 7 or (hour == 7 and minute <= 30)):
-                                force_80w = True
-                        else:
-                            # Weekdays: 23:00 to 5:00
-                            if hour >= 23 or hour < 5:
-                                force_80w = True
+                        if smartmeter_mode == 2:
+                            is_weekend = weekday >= 5
+                            if is_weekend:
+                                # Weekend: 23:00 to 7:30
+                                if hour >= 23 or (hour < 7 or (hour == 7 and minute <= 30)):
+                                    force_80w = True
+                            else:
+                                # Weekdays: 23:00 to 5:00
+                                if hour >= 23 or hour < 5:
+                                    force_80w = True
 
                         # Calculate flowing 2-minute slot
                         b1_dt = now
