@@ -303,6 +303,11 @@ def calculate_battery_output_ct001():
     except Exception as e:
         log(f"[Calculation] Error: {e}", 0)
 
+
+def format_time_without_leading_zero(value):
+    return f"{value.hour}:{value.minute:02d}"
+
+
 def publish_set_battery_output(mqttc):
     while True:
         try:
@@ -334,10 +339,10 @@ def publish_set_battery_output(mqttc):
                             # clamp to end of current day
                             e1_dt = datetime.datetime(now.year, now.month, now.day, 23, 59)
 
-                        b1 = b1_dt.strftime("%H:%M")
-                        e1 = e1_dt.strftime("%H:%M")
+                        b1 = format_time_without_leading_zero(b1_dt)
+                        e1 = format_time_without_leading_zero(e1_dt)
                         if e1 == "23:59":
-                            b2 = "00:01"
+                            b2 = "0:01"
                         else:
                             b2 = e1
                         e2 = "23:59"
