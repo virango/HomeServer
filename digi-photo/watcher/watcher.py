@@ -7,13 +7,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from watchfiles import Change, watch
+
 WATCH_DIR = Path(os.getenv("WATCH_DIR", "/watch"))
 DEFAULT_DEST_DIR = Path(os.getenv("DEFAULT_DEST_DIR", "/photos"))
 ROOT_MEDIA_DIR = Path(os.getenv("ROOT_MEDIA_DIR", str(DEFAULT_DEST_DIR)))
 EVENTS_DB_PATH = Path(os.getenv("EVENTS_DB_PATH", "/data/events.db"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "15"))
 
-SUPPORTED_EXTENSIONS = {"cr3", "CR3", "jpg", "JPG", "cr2", "CR2", "mov", "MOV"}
+SUPPORTED_EXTENSIONS = {"cr3", "jpg", "cr2", "mov"}
+TEMP_FILE_SUFFIXES = {".part", ".tmp", ".partial"}
 FILENAME_DATE_PATTERN = re.compile(r"^(?P<date>\d{8}_\d{4})")
 
 
@@ -103,16 +106,112 @@ def build_destination_dir(file_path: Path, file_date: str | None, event_dir: str
     return ROOT_MEDIA_DIR / photographer / year / event_segment
 
 
-def run_renpix() -> None:
-    print(f"Running renpix in {WATCH_DIR}")
+def is_temporary_file(path: Path) -> bool:
+    return any(path.name.lower().endswith(suffix) for suffix in TEMP_FILE_SUFFIXES)
+
+
+def is_supported_file(path: Path) -> bool:
+    return (
+        path.is_file()
+        and not is_temporary_file(path)
+        and path.suffix.lstrip(".").lower() in SUPPORTED_EXTENSIONS
+    )
+
+
+def is_file_stable(path: Path, check_interval: float = 1.0, checks: int = 3) -> bool:
     try:
-        subprocess.run(["/app/renpix"], cwd=WATCH_DIR, check=False)
-    except Exception as exc:
-        print(f"Failed to run renpix: {exc}")
+        previous = path.stat()
+    except OSError:
+        return False
+
+    for _ in range(checks):
+        time.sleep(check_interval)
+        try:
+            current = path.stat()
+        except OSError:
+            return False
+        if current.st_size != previous.st_size or current.st_mtime != previous.st_mtime:
+            return False
+        previous = current
+    return True
 
 
-def move_photos() -> None:
-    files = [p for p in WATCH_DIR.iterdir() if p.is_file() and p.suffix.lstrip(".") in SUPPORTED_EXTENSIONS]
+RENAME_PATTERN = re.compile(r"^'(?P<old>[^']+)' --> '(?P<new>[^']+)'$")
+META_WARNING_PATTERN = re.compile(r"Error reading meta data", re.I)
+
+
+def normalize_watch_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(WATCH_DIR))
+    except ValueError:
+        return str(path)
+
+
+def run_renpix(files: list[Path]) -> list[Path]:
+    renamed_paths: list[Path] = []
+    for file_path in files:
+        if not file_path.exists():
+            continue
+
+        relative_path = normalize_watch_path(file_path)
+        print(f"Running renpix for {relative_path} in {WATCH_DIR}", flush=True)
+        try:
+            completed = subprocess.run(
+                ["/app/renpix", relative_path],
+                cwd=WATCH_DIR,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as exc:
+            print(f"Failed to run renpix: {exc}", flush=True)
+            continue
+
+        if completed.stdout:
+            print(completed.stdout, end="", flush=True)
+        if completed.stderr:
+            print(completed.stderr, end="", flush=True)
+
+        final_path = None
+        for line in completed.stdout.splitlines():
+            match = RENAME_PATTERN.match(line.strip())
+            if match:
+                final_path = WATCH_DIR / match.group("new")
+                break
+
+        metadata_error = any(
+            META_WARNING_PATTERN.search(line) for line in completed.stderr.splitlines()
+        )
+        if metadata_error:
+            print(
+                f"Warning: metadata error detected for {relative_path}; skipping move until file is complete.",
+                flush=True,
+            )
+            continue
+
+        if final_path is None:
+            final_path = WATCH_DIR / relative_path
+
+        if final_path.exists() and is_supported_file(final_path):
+            renamed_paths.append(final_path)
+        else:
+            print(
+                f"Warning: expected renamed file not found for {relative_path}, "
+                f"falling back to original path.",
+                flush=True,
+            )
+            if file_path.exists():
+                renamed_paths.append(file_path)
+
+    return renamed_paths
+
+
+def move_photos(files: list[Path] | None = None) -> None:
+    if files is None:
+        files = [p for p in WATCH_DIR.iterdir() if is_supported_file(p) and is_file_stable(p)]
+    else:
+        files = [p for p in files if p.exists() and is_supported_file(p)]
+
     if not files:
         return
 
@@ -133,8 +232,37 @@ def move_photos() -> None:
                     break
                 suffix += 1
 
-        print(f"Moving {file_path} -> {dest_path}")
+        print(f"Moving {file_path} -> {dest_path}", flush=True)
+        try:
+            original_stat = file_path.stat()
+            print(
+                f"Original timestamps for {file_path}: atime={original_stat.st_atime}, "
+                f"mtime={original_stat.st_mtime}, ctime={original_stat.st_ctime}",
+                flush=True,
+            )
+        except Exception as exc:
+            original_stat = None
+            print(f"Warning: could not stat source file {file_path}: {exc}", flush=True)
+
         shutil.move(str(file_path), str(dest_path))
+
+        if original_stat is not None:
+            try:
+                os.utime(str(dest_path), ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+                restored_stat = dest_path.stat()
+                print(
+                    f"Restored timestamps for {dest_path}: atime={restored_stat.st_atime}, "
+                    f"mtime={restored_stat.st_mtime}, ctime={restored_stat.st_ctime}",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"Warning: could not preserve timestamp for {dest_path}: {exc}", flush=True)
+        else:
+            print(f"Skipped timestamp preservation for {dest_path} because source stat failed.", flush=True)
+
+
+def scan_initial_files() -> list[Path]:
+    return [p for p in WATCH_DIR.iterdir() if is_supported_file(p) and is_file_stable(p)]
 
 
 def main() -> None:
@@ -142,14 +270,31 @@ def main() -> None:
     DEFAULT_DEST_DIR.mkdir(parents=True, exist_ok=True)
     ensure_database()
 
-    print("Starting watcher service")
-    while True:
-        try:
-            run_renpix()
-            move_photos()
-        except Exception as exc:
-            print(f"Watcher error: {exc}")
-        time.sleep(POLL_INTERVAL)
+    print("Starting watcher service", flush=True)
+
+    initial_files = scan_initial_files()
+    if initial_files:
+        renamed = run_renpix(initial_files)
+        move_photos(renamed)
+
+    try:
+        for changes in watch(WATCH_DIR, debounce=1000, recursive=False):
+            event_paths: set[Path] = set()
+            for change, path_str in changes:
+                if change not in {Change.added, Change.modified}:
+                    continue
+                path = Path(path_str)
+                if is_supported_file(path):
+                    event_paths.add(path)
+
+            stable_files = [path for path in event_paths if is_file_stable(path)]
+            if stable_files:
+                renamed = run_renpix(stable_files)
+                move_photos(renamed)
+    except KeyboardInterrupt:
+        print("Watcher stopped by user", flush=True)
+    except Exception as exc:
+        print(f"Watcher error: {exc}", flush=True)
 
 
 if __name__ == "__main__":

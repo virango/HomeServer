@@ -1,1 +1,2 @@
 # Optionale Python-Abhängigkeiten für den Watcher
+watchfiles

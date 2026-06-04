@@ -5,9 +5,9 @@ services:
       context: .
       dockerfile: watcher/Dockerfile
     volumes:
-      - ./watch:/watch
+      - /Volumes/HomeServerData/Digi-Photo/Download:/watch
       - /Volumes/HomeServerData/OneDrive/Media/Pictures:/photos
-      - ./data:/data
+      - /Volumes/HomeServerData/Digi-Photo/Data:/data
     environment:
       WATCH_DIR: /watch
       DEFAULT_DEST_DIR: /photos
@@ -23,7 +23,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/data
+      - /Volumes/HomeServerData/Digi-Photo/Data:/data
       - /Volumes/HomeServerData/OneDrive/Media/Pictures:/photos
     environment:
       EVENTS_DB_PATH: /data/events.db

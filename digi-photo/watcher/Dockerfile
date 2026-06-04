@@ -8,10 +8,12 @@ WORKDIR /app
 
 COPY renpix ./
 COPY .ExifTool_config ./
-COPY watcher.py ./
+COPY watcher/watcher.py ./
 
+RUN python -m pip install --no-cache-dir watchfiles
 RUN chmod +x renpix
 
+ENV PYTHONUNBUFFERED=1
 ENV WATCH_DIR=/watch \
     DEFAULT_DEST_DIR=/photos \
     EVENTS_DB_PATH=/data/events.db \

@@ -3,6 +3,19 @@ import argparse
 import subprocess
 from pathlib import Path
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = SCRIPT_DIR / ".ExifTool_config"
+HOME_CONFIG_FILE = Path.home() / ".ExifTool_config"
+
+
+def get_config_file():
+    """Find the .ExifTool_config file with fallback logic."""
+    if CONFIG_FILE.exists():
+        return CONFIG_FILE
+    if HOME_CONFIG_FILE.exists():
+        return HOME_CONFIG_FILE
+    return None
+
 EXPR_BY_EXT = {
     ".cr2": "-FileName<${CreateDate}-$MyRawFileNumber.cr2",
     ".cr3": "-FileName<${CreateDate}-$MyRawFileNumber.cr3",
@@ -28,20 +41,23 @@ def run_renpix(paths=None):
     if paths:
         groups = build_groups(paths)
     else:
-        groups = {}
+        # Expand glob patterns to actual files
+        expanded_paths = []
         for pattern in DEFAULT_PATTERNS:
-            expr = EXPR_BY_EXT.get(Path(pattern).suffix.lower())
-            if expr is None:
-                continue
-            groups.setdefault(expr, []).append(pattern)
+            expanded_paths.extend(Path(".").glob(pattern))
+        groups = build_groups(expanded_paths)
 
     if not groups:
         print("Nothing to rename.")
         return 0
 
+    config_file = get_config_file()
     result = 0
     for expr, items in groups.items():
-        command = ["exiftool", "-v", expr, "-d", "%Y%m%d_%H%M"] + items
+        command = ["exiftool"]
+        if config_file:
+            command.extend(["-config", str(config_file)])
+        command.extend(["-P", "-v", expr, "-d", "%Y%m%d_%H%M"] + items)
         print("Running:", " ".join(command))
         completed = subprocess.run(command)
         if completed.returncode != 0:

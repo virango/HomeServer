@@ -16,12 +16,18 @@
       <section class="panel">
         <h2>Ereignis anlegen</h2>
         <form id="event-form">
+          <input type="hidden" name="event_id">
           <label>Bezeichnung<input type="text" name="title" required></label>
-          <label>Zielverzeichnis<input type="text" name="target_dir" placeholder="z. B. Urlaub/2026" required></label>
+          <label>Zielverzeichnis<input type="text" name="target_dir" placeholder="z. B. Urlaub Taiwan"></label>
           <label>Startdatum<input type="date" name="start_date" required></label>
           <label>Enddatum<input type="date" name="end_date"></label>
           <label>Beschreibung<textarea name="description"></textarea></label>
-          <button type="submit">Speichern</button>
+          <div class="form-actions">
+            <button type="submit" id="create-btn">Speichern</button>
+            <button type="button" id="update-btn" style="display:none">Aktualisieren</button>
+            <button type="button" id="delete-btn" style="display:none">Löschen</button>
+            <button type="button" id="cancel-btn" style="display:none">Abbrechen</button>
+          </div>
         </form>
       </section>
 
@@ -46,6 +52,12 @@
     const eventForm = document.getElementById('event-form');
     const eventsList = document.getElementById('events-list');
 
+    function addOneDay(dateString) {
+      const date = new Date(dateString);
+      date.setDate(date.getDate() + 1);
+      return date.toISOString().slice(0, 10);
+    }
+
     async function loadEvents() {
       const response = await fetch('/api/events');
       const events = await response.json();
@@ -53,11 +65,12 @@
         id: event.id,
         title: event.title,
         start: event.start_date,
-        end: event.end_date,
+        end: addOneDay(event.end_date),
         allDay: true,
         extendedProps: {
           target_dir: event.target_dir,
           description: event.description,
+          original_end: event.end_date
         }
       }));
     }
@@ -68,13 +81,24 @@
       events.forEach(event => calendar.addEvent(event));
 
       eventsList.innerHTML = events.map(event => `
-        <tr>
-          <td>${event.title}</td>
+        <tr data-event-id="${event.id}">
+          <td><button class="edit-event" data-id="${event.id}">${event.title}</button></td>
           <td>${event.start}</td>
-          <td>${event.end}</td>
+          <td>${event.extendedProps.original_end}</td>
           <td>${event.extendedProps.target_dir}</td>
         </tr>
       `).join('');
+
+      // attach click handlers for edit buttons in the list
+      document.querySelectorAll('.edit-event').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          const id = btn.getAttribute('data-id');
+          const response = await fetch('/api/events');
+          const all = await response.json();
+          const ev = all.find(x => String(x.id) === String(id));
+          if (ev) selectEvent(ev);
+        });
+      });
     }
 
     const calendar = new FullCalendar.Calendar(calendarEl, {
@@ -83,18 +107,44 @@
         left: 'prev,next today',
         center: 'title',
         right: 'dayGridMonth,listWeek'
+      },
+      eventClick: function(info) {
+        // info.event.extendedProps contains our extra fields
+        const ev = {
+          id: info.event.id,
+          title: info.event.title,
+          start_date: info.event.startStr,
+          end_date: info.event.extendedProps.original_end || info.event.endStr,
+          target_dir: info.event.extendedProps.target_dir,
+          description: info.event.extendedProps.description || ''
+        };
+        selectEvent(ev);
       }
     });
 
     calendar.render();
     renderEvents();
 
+    const titleInput = eventForm.querySelector('input[name="title"]');
+    const targetInput = eventForm.querySelector('input[name="target_dir"]');
+    let syncedTarget = true;
+
+    titleInput.addEventListener('input', () => {
+      if (syncedTarget) {
+        targetInput.value = titleInput.value;
+      }
+    });
+
+    targetInput.addEventListener('input', () => {
+      syncedTarget = targetInput.value === titleInput.value;
+    });
+
     eventForm.addEventListener('submit', async event => {
       event.preventDefault();
       const formData = new FormData(eventForm);
       const payload = {
         title: formData.get('title'),
-        target_dir: formData.get('target_dir'),
+        target_dir: formData.get('target_dir') || formData.get('title'),
         start_date: formData.get('start_date'),
         end_date: formData.get('end_date') || formData.get('start_date'),
         description: formData.get('description') || ''
@@ -108,12 +158,87 @@
 
       if (response.ok) {
         eventForm.reset();
+        hideEditActions();
         renderEvents();
       } else {
         const error = await response.json();
         alert('Fehler: ' + (error.error || 'Ungültige Eingabe'));
       }
     });
+
+    // helpers for edit/update/delete
+    const updateBtn = document.getElementById('update-btn');
+    const deleteBtn = document.getElementById('delete-btn');
+    const cancelBtn = document.getElementById('cancel-btn');
+
+    function showEditActions() {
+      document.getElementById('create-btn').style.display = 'none';
+      updateBtn.style.display = '';
+      deleteBtn.style.display = '';
+      cancelBtn.style.display = '';
+    }
+
+    function hideEditActions() {
+      document.getElementById('create-btn').style.display = '';
+      updateBtn.style.display = 'none';
+      deleteBtn.style.display = 'none';
+      cancelBtn.style.display = 'none';
+      eventForm.querySelector('input[name="event_id"]').value = '';
+      eventForm.reset();
+      syncedTarget = true;
+    }
+
+    function selectEvent(ev) {
+      // ev has id, title, start_date, end_date, target_dir, description
+      eventForm.querySelector('input[name="event_id"]').value = ev.id;
+      eventForm.querySelector('input[name="title"]').value = ev.title;
+      eventForm.querySelector('input[name="target_dir"]').value = ev.target_dir || ev.title;
+      eventForm.querySelector('input[name="start_date"]').value = ev.start_date;
+      eventForm.querySelector('input[name="end_date"]').value = ev.end_date || ev.start_date;
+      eventForm.querySelector('textarea[name="description"]').value = ev.description || '';
+      syncedTarget = eventForm.querySelector('input[name="target_dir"]').value === ev.title;
+      showEditActions();
+    }
+
+    updateBtn.addEventListener('click', async () => {
+      const id = eventForm.querySelector('input[name="event_id"]').value;
+      if (!id) return;
+      const formData = new FormData(eventForm);
+      const payload = {
+        title: formData.get('title'),
+        target_dir: formData.get('target_dir') || formData.get('title'),
+        start_date: formData.get('start_date'),
+        end_date: formData.get('end_date') || formData.get('start_date'),
+        description: formData.get('description') || ''
+      };
+      const response = await fetch(`/api/events/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) {
+        hideEditActions();
+        renderEvents();
+      } else {
+        const err = await response.json();
+        alert('Fehler: ' + (err.error || 'Update fehlgeschlagen'));
+      }
+    });
+
+    deleteBtn.addEventListener('click', async () => {
+      const id = eventForm.querySelector('input[name="event_id"]').value;
+      if (!id) return;
+      if (!confirm('Dieses Ereignis wirklich löschen?')) return;
+      const response = await fetch(`/api/events/${id}`, { method: 'DELETE' });
+      if (response.ok) {
+        hideEditActions();
+        renderEvents();
+      } else {
+        alert('Löschen fehlgeschlagen');
+      }
+    });
+
+    cancelBtn.addEventListener('click', () => hideEditActions());
   </script>
 </body>
 </html>

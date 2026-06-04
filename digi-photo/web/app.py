@@ -35,18 +35,25 @@ def get_db_connection():
     return conn
 
 
+def normalize_target_dir(target_dir: str, title: str) -> str:
+    normalized = target_dir.strip().replace("\\", "/").strip("/")
+    if not normalized:
+        return title
+    if "/" in normalized:
+        normalized = normalized.split("/")[-1]
+    return normalized
+
+
 def validate_event_payload(data):
     title = data.get("title", "").strip()
     start_date = data.get("start_date", "").strip()
     end_date = data.get("end_date", "").strip() or start_date
-    target_dir = data.get("target_dir", "").strip()
+    target_dir = normalize_target_dir(data.get("target_dir", ""), title)
 
     if not title:
         return None, "title is required"
     if not start_date:
         return None, "start_date is required"
-    if not target_dir:
-        return None, "target_dir is required"
 
     return {
         "title": title,
