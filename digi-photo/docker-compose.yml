@@ -31,3 +31,28 @@ services:
       ROOT_MEDIA_DIR: /photos
       WEB_PORT: "8080"
     restart: unless-stopped
+
+  digikam_db:
+    image: mysql:9.0
+    container_name: digikam_db
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: <todo:set a strong password here>
+      MYSQL_ALLOW_EMPTY_PASSWORD: "no"
+      MYSQL_USER: tholan
+      MYSQL_PASSWORD: <todo:set a strong password here>
+
+    command: >
+      mysqld
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_0900_ai_ci
+
+    ports:
+      - "3306:3306"
+
+    volumes:
+      - /Volumes/HomeServerData/Digi-Photo/digiKam/data:/var/lib/mysql
+      - /Volumes/HomeServerData/Digi-Photo/digiKam/conf:/etc/mysql/conf.d
+      - /Volumes/HomeServerData/Digi-Photo/digiKam/init:/docker-entrypoint-initdb.d
+  
